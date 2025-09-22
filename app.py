@@ -1,0 +1,338 @@
+# app.py
+# Minimal one file RAG scaffold, ingest + keyword search + optional API
+# How to use:
+# 1) Set RUN_MODE = "ingest" to build chunks.jsonl from your PDFs
+# 2) Set RUN_MODE = "search" to run a default search without typing input
+# 3) Set RUN_MODE = "serve" to start a FastAPI server and test /docs or /demo
+#
+# Install once:
+#   pip install pypdf fastapi uvicorn pydantic
+
+from pathlib import Path
+from pypdf import PdfReader
+from fastapi import FastAPI
+from pydantic import BaseModel
+from contextlib import asynccontextmanager
+import re, json, uuid, math
+from collections import Counter, defaultdict
+
+# ---------- paths and knobs ----------
+PDF_DIR = Path(r"C:\Users\WJawad\OneDrive - Element Fleet Management\Desktop\pdfs")
+OUT_PATH = PDF_DIR / "chunks.jsonl"  # save next to your PDFs
+CHUNK_SIZE = 800
+OVERLAP = 150
+RUN_MODE = "serve"         # choose: "ingest" | "embed" | "search" | "serve"
+DEFAULT_QUERY = "what is a process"
+TOP_K = 5
+
+# ---------- ingestion ----------
+def normalize(text: str) -> str:
+    t = text.replace("\r", "\n")
+    t = re.sub(r"[ \t]+", " ", t)
+    t = re.sub(r"\n{2,}", "\n", t)
+    return t.strip()
+
+def extract_pages(pdf_path: Path):
+    reader = PdfReader(str(pdf_path))
+    pages = []
+    for i, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        text = normalize(text)
+        if text:
+            pages.append({"page": i, "text": text})
+    return pages
+
+def chunk_pages(pages, file_name):
+    chunks = []
+    for p in pages:
+        txt = p["text"]
+        start = 0
+        n = len(txt)
+        while start < n:
+            end = min(start + CHUNK_SIZE, n)
+            chunks.append({
+                "id": str(uuid.uuid4()),
+                "file": file_name,
+                "page": p["page"],
+                "start": start,
+                "end": end,
+                "text": txt[start:end]
+            })
+            if end == n:
+                break
+            start = end - OVERLAP
+    return chunks
+
+def ingest_folder():
+    if not PDF_DIR.exists():
+        raise FileNotFoundError(f"PDF_DIR not found: {PDF_DIR}")
+    all_chunks = []
+    for pdf in PDF_DIR.glob("*.pdf"):
+        pages = extract_pages(pdf)
+        chunks = chunk_pages(pages, pdf.name)
+        all_chunks.extend(chunks)
+        print(f"{pdf.name}: {len(chunks)} chunks")
+    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # overwrite for clean runs
+    with OUT_PATH.open("w", encoding="utf-8") as f:
+        for ch in all_chunks:
+            f.write(json.dumps(ch, ensure_ascii=False) + "\n")
+    print(f"Total chunks: {len(all_chunks)}")
+    print("Wrote:", OUT_PATH.resolve())
+
+def dedupe_chunks_on_disk(path: Path):
+    """Optional: remove duplicates if you ever accidentally append twice."""
+    if not path.exists():
+        print("No chunks file to dedupe.")
+        return
+    seen = set()
+    rows = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            ch = json.loads(line)
+            key = (ch["file"], ch["page"], ch.get("start"), ch.get("end"))
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(ch)
+    tmp = path.with_suffix(".dedup.jsonl")
+    with tmp.open("w", encoding="utf-8") as out:
+        for ch in rows:
+            out.write(json.dumps(ch, ensure_ascii=False) + "\n")
+    tmp.replace(path)
+    print(f"Deduped. Kept {len(rows)} chunks. Updated {path}")
+
+# ---------- keyword search (no external search libs) ----------
+STOP = {
+    "the","a","an","and","or","of","to","in","on","for","with","by","is","are",
+    "was","were","it","that","this","as","at","from","be","been","but","if","not",
+    "we","you","your","our"
+}
+_tok_findall = re.compile(r"[A-Za-z0-9]+").findall
+
+def tokenize(t: str):
+    return [w.lower() for w in _tok_findall(t) if w.lower() not in STOP]
+
+def load_chunks(path: Path):
+    chunks = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            chunks.append(json.loads(line))
+    return chunks
+
+def load_embeddings(path):
+    with path.open(encoding="utf-8") as f:
+        return {json.loads(line)["id"]: json.loads(line)["embedding"] for line in f}
+
+def build_idf(chunks):
+    N = len(chunks)
+    df = defaultdict(int)
+    for ch in chunks:
+        for t in set(tokenize(ch["text"])):
+            df[t] += 1
+
+    # classic smoothed idf
+    return {t: math.log((N + 1) / (df[t] + 1)) + 1.0 for t in df}
+
+def tfidf(tokens, idf):
+    tf = Counter(tokens)
+    return {t: c * idf[t] for t, c in tf.items() if t in idf}
+
+def cosine(a, b):
+    if not a or not b:
+        return 0.0
+    dot = sum(a[t] * b.get(t, 0.0) for t in a)
+    na = math.sqrt(sum(w*w for w in a.values()))
+    nb = math.sqrt(sum(w*w for w in b.values()))
+    return 0.0 if na == 0 or nb == 0 else dot / (na * nb)
+
+def cosine_similarity(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    return dot / (norm_a * norm_b + 1e-8)
+
+def embed_query(query: str) -> list[float]:
+    import random
+    random.seed(hash(query) % 10_000)
+    return [random.uniform(-1, 1) for _ in range(1024)]
+
+
+def search_keyword(query, chunks, idf, k=TOP_K):
+    qv = tfidf(tokenize(query), idf)
+    scored = []
+    for ch in chunks:
+        dv = tfidf(tokenize(ch["text"]), idf)
+        s = cosine(qv, dv)
+        if s > 0:
+            scored.append((s, ch))
+    scored.sort(reverse=True, key=lambda x: x[0])
+
+    # small result dedupe so overlap does not show duplicates
+    seen = set()
+    results = []
+    for s, ch in scored:
+        key = (ch["file"], ch["page"], ch["text"][:160])
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append({
+            "score": round(s, 4),
+            "file": ch["file"],
+            "page": ch["page"],
+            "id": ch["id"],
+            "snippet": ch["text"][:200].replace("\n", " ")
+        })
+        if len(results) == k:
+            break
+    return results
+
+def search_semantic(query, chunks, embeddings, k=TOP_K):
+    qvec = embed_query(query)
+    scored = []
+
+    for ch in chunks:
+        cid = ch["id"]
+        if cid not in embeddings:
+            continue
+        score = cosine_similarity(qvec, embeddings[cid])
+        scored.append((score, ch))
+
+    scored.sort(reverse=True, key=lambda x: x[0])
+    results = []
+    seen = set()
+
+    for score, ch in scored:
+        key = (ch["file"], ch["page"], ch["text"][:160])
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append({
+            "score": round(score, 4),
+            "file": ch["file"],
+            "page": ch["page"],
+            "id": ch["id"],
+            "snippet": ch["text"][:200].replace("\n", " ")
+        })
+        if len(results) == k:
+            break
+
+    return results
+
+# ---------- semantic embeddings (Mistral) ----------
+# import requests, time
+
+# MISTRAL_API_KEY = "CF2DvjIoshzasO0mtBkPj44fo2nXDwPk"
+EMB_PATH = PDF_DIR / "embeddings.jsonl"  # same place as chunks
+
+# def embed_texts(texts: list[str]) -> list[list[float]]:
+#     headers = {
+#         "Authorization": f"Bearer {MISTRAL_API_KEY}",
+#         "Content-Type": "application/json"
+#     }
+#     url = "https://api.mistral.ai/v1/embeddings"
+#     out = []
+#     B = 32
+#     for i in range(0, len(texts), B):
+#         batch = texts[i:i+B]
+#         r = requests.post(url, headers=headers, json={"model": "mistral-embed", "input": batch})
+#         r.raise_for_status()
+#         out.extend([row["embedding"] for row in r.json()["data"]])
+#         time.sleep(0.1)
+#     return out
+
+# def save_embeddings(ids, vecs, path=EMB_PATH):
+#     with path.open("w", encoding="utf-8") as f:
+#         for cid, v in zip(ids, vecs):
+#             f.write(json.dumps({"id": cid, "vec": v}) + "\n")
+
+# def build_embeddings_from_chunks():
+#     if not OUT_PATH.exists():
+#         raise FileNotFoundError(f"No chunks to embed at {OUT_PATH}")
+#     chunks = load_chunks(OUT_PATH)
+#     ids = [ch["id"] for ch in chunks]
+#     texts = [ch["text"] for ch in chunks]
+#     vecs = embed_texts(texts)
+#     save_embeddings(ids, vecs)
+#     print(f"Embedded {len(vecs)} chunks. Wrote to {EMB_PATH}")
+
+
+# ---------- FastAPI server ----------
+CHUNKS = None
+IDF = None
+EMBEDDINGS = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global CHUNKS, IDF,EMBEDDINGS
+    if OUT_PATH.exists():
+        CHUNKS = load_chunks(OUT_PATH)
+        IDF = build_idf(CHUNKS)
+        EMBEDDINGS = load_embeddings(EMB_PATH)
+
+        print(f"Loaded {len(CHUNKS)} chunks for serving")
+    else:
+        print("Warning: chunks.jsonl not found at startup. Run RUN_MODE='ingest' first.")
+    yield
+
+app = FastAPI(title="RAG demo", lifespan=lifespan)
+
+class QueryIn(BaseModel):
+    query: str
+    top_k: int = TOP_K
+
+@app.post("/query")
+def query_api(body: QueryIn):
+    if not CHUNKS or not IDF or not EMBEDDINGS:
+        return {"results": [], "note": "Missing data. Run ingestion and ensure embeddings are loaded."}
+    
+    q = body.query.strip()
+
+    if q.lower() in {"hi", "hello", "thanks", "thank you"} or len(q.split()) < 2:
+        return {"results": [], "note": "Ask a question about your PDFs."}
+
+    kw_results = search_keyword(q, CHUNKS, IDF, body.top_k)
+    sem_results = search_semantic(q, CHUNKS, EMBEDDINGS, body.top_k)
+
+    return {
+        "query": q,
+        "keyword_results": kw_results,
+        "semantic_results": sem_results
+    }
+
+# @app.get("/demo")
+# def demo_api():
+#     if not CHUNKS or not IDF:
+#         return {"query": DEFAULT_QUERY, "results": [], "note": "No chunks loaded. Run ingestion first."}
+#     return {"query": DEFAULT_QUERY, "results": search_keyword(DEFAULT_QUERY, CHUNKS, IDF, TOP_K)}
+
+# ---------- simple runner ----------
+if __name__ == "__main__":
+    if RUN_MODE == "ingest":
+        ingest_folder()
+        # optional safety: dedupe once if you ever appended before
+        # dedupe_chunks_on_disk(OUT_PATH)
+
+    # elif RUN_MODE == "embed":
+    #     build_embeddings_from_chunks()
+
+    elif RUN_MODE == "search":
+        if not OUT_PATH.exists():
+            raise FileNotFoundError(f"Could not find {OUT_PATH}. Set RUN_MODE='ingest' first.")
+        chunks = load_chunks(OUT_PATH)
+        idf = build_idf(chunks)
+        print(f"Loaded chunks: {len(chunks)}")
+        print(f'Default query: "{DEFAULT_QUERY}"')
+        for r in search_keyword(DEFAULT_QUERY, chunks, idf, TOP_K):
+            print(f"[{r['score']}] {r['file']} p.{r['page']}  {r['snippet']}")
+
+    elif RUN_MODE == "serve":
+        if not OUT_PATH.exists():
+            print("Warning: no chunks file yet. Start server anyway, but /demo will be empty.")
+        import uvicorn
+        uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+        # uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=False)
+
+
+    else:
+        raise ValueError("RUN_MODE must be one of: 'ingest', 'search', 'serve'")
