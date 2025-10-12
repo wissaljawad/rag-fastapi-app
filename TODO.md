@@ -2,10 +2,10 @@
 
 ## Core Requirements
 - [x] Data Ingestion: Implement text extraction and chunking from PDF files (sentence-based chunking done)
-- [ ] Data Ingestion: Develop API endpoint to upload PDF files (/upload endpoint)
-- [ ] Query Processing: Intent detection (basic check for greetings done, enhance)
-- [ ] Query Processing: Transform query to improve retrieval (e.g., expand abbreviations, remove stop words)
-- [ ] Semantic Search: Design search mechanism using processed query (hybrid search done)
+- [x] Data Ingestion: Develop API endpoint to upload PDF files (/upload endpoint)
+- [x] Query Processing: Intent detection (basic check for greetings done, enhance)
+- [x] Query Processing: Transform query to improve retrieval (e.g., expand abbreviations, remove stop words)
+- [x] Semantic Search: Design search mechanism using processed query (hybrid search done)
 - [x] Semantic Search: Combine semantic and keyword results (hybrid search averages scores)
 - [ ] Post-processing: Merge and re-rank results (enhance hybrid search with better ranking)
 - [x] Generation: Call LLM with prompt template to generate answers (generate_response done)

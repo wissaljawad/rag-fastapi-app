@@ -233,6 +233,52 @@ def embed_query(query):
     return embed_texts([query])[0]
 
 
+def process_query(query):
+    """Process the query for intent detection and transformation."""
+    q = query.strip().lower()
+
+    # Intent detection: refuse non-knowledge queries
+    if q in {"hi", "hello", "thanks", "thank you", "bye", "goodbye"} or len(q.split()) < 2:
+        return None, "Please ask a question about the ingested PDFs."
+
+    # Basic query transformation: expand common abbreviations
+    transformations = {
+        "what's": "what is",
+        "it's": "it is",
+        "don't": "do not",
+        "can't": "cannot",
+        "won't": "will not",
+        "i'm": "i am",
+        "you're": "you are",
+        "they're": "they are",
+        "we're": "we are",
+        "isn't": "is not",
+        "aren't": "are not",
+        "wasn't": "was not",
+        "weren't": "were not",
+        "haven't": "have not",
+        "hasn't": "has not",
+        "hadn't": "had not",
+        "doesn't": "does not",
+        "didn't": "did not",
+        "wouldn't": "would not",
+        "shouldn't": "should not",
+        "couldn't": "could not",
+        "mightn't": "might not",
+        "mustn't": "must not"
+    }
+
+    for abbr, full in transformations.items():
+        q = q.replace(abbr, full)
+
+    # Remove extra stop words if too many
+    tokens = tokenize(q)
+    if len(tokens) > 10:  # If query is long, keep only key terms
+        tokens = [t for t in tokens if t not in STOP][:10]  # Limit to 10 key terms
+        q = " ".join(tokens)
+
+    return q, None
+
 def generate_response(query, context_chunks):
     """Generate a response using Mistral chat API based on query and retrieved chunks."""
     headers = {
@@ -395,15 +441,15 @@ def query_api(body: QueryIn):
     if not CHUNKS or not IDF or not EMBEDDINGS:
         return {"results": [], "note": "Missing data. Run ingestion and ensure embeddings are loaded."}
 
-    q = body.query.strip()
+    # Process query for intent and transformation
+    processed_query, error_msg = process_query(body.query)
+    if processed_query is None:
+        return {"results": [], "note": error_msg}
 
-    if q.lower() in {"hi", "hello", "thanks", "thank you"} or len(q.split()) < 2:
-        return {"results": [], "note": "Ask a question about your PDFs."}
-
-    hybrid_results = search_hybrid(q, CHUNKS, IDF, EMBEDDINGS, body.top_k)
+    hybrid_results = search_hybrid(processed_query, CHUNKS, IDF, EMBEDDINGS, body.top_k)
 
     return {
-        "query": q,
+        "query": processed_query,
         "hybrid_results": hybrid_results
     }
 
