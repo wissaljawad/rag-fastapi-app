@@ -4,10 +4,6 @@
 # 1) Set RUN_MODE = "ingest" to build chunks.jsonl from your PDFs
 # 2) Set RUN_MODE = "search" to run a default search without typing input
 # 3) Set RUN_MODE = "serve" to start a FastAPI server and test /docs or /demo
-#
-# Install once:
-#   pip install pypdf fastapi uvicorn pydantic
-
 from pathlib import Path
 from pypdf import PdfReader
 from fastapi import FastAPI
@@ -15,13 +11,15 @@ from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import re, json, uuid, math
 from collections import Counter, defaultdict
+import requests, time
 
 # ---------- paths and knobs ----------
-PDF_DIR = Path(r"C:\Users\wissa\Desktop\app\realestaterag")  # put your PDFs here
+PDF_DIR = Path(".")  # put your PDFs here
 OUT_PATH = PDF_DIR / "chunks.jsonl"  # save next to your PDFs
+EMB_PATH = PDF_DIR / "embeddings.jsonl"
 CHUNK_SIZE = 800
 OVERLAP = 150
-RUN_MODE = "ingest"         # choose: "ingest" | "embed" | "search" | "serve"
+RUN_MODE = "embed"         # choose: "ingest" | "embed" | "search" | "serve"
 DEFAULT_QUERY = "what is a process"
 TOP_K = 5
 
@@ -115,14 +113,24 @@ def tokenize(t: str):
 
 def load_chunks(path: Path):
     chunks = []
+    if not path.exists():
+        return chunks
     with path.open(encoding="utf-8") as f:
         for line in f:
             chunks.append(json.loads(line))
     return chunks
 
-def load_embeddings(path):
+# NOTE: fix — load the same key we save ("vec"); also handle missing file gracefully
+
+def load_embeddings(path: Path):
+    if not path.exists():
+        return {}
+    embs = {}
     with path.open(encoding="utf-8") as f:
-        return {json.loads(line)["id"]: json.loads(line)["embedding"] for line in f}
+        for line in f:
+            row = json.loads(line)
+            embs[row["id"]] = row["vec"]
+    return embs
 
 def build_idf(chunks):
     N = len(chunks)
@@ -130,7 +138,6 @@ def build_idf(chunks):
     for ch in chunks:
         for t in set(tokenize(ch["text"])):
             df[t] += 1
-
     # classic smoothed idf
     return {t: math.log((N + 1) / (df[t] + 1)) + 1.0 for t in df}
 
@@ -150,9 +157,46 @@ def cosine_similarity(a, b):
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(y * y for y in b))
-    return dot / (norm_a * norm_b + 1e-8)
+    return 0.0 if norm_a == 0 or norm_b == 0 else dot / (norm_a * norm_b)
 
-def embed_query(query: str) -> list[float]:
+# ---------- semantic embeddings (Mistral) ----------
+MISTRAL_API_KEY = "OvaGGKbmryAJjIo3rg3vRumbJelS6nsk"
+
+
+def embed_texts(texts):
+    headers = {
+        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    url = "https://api.mistral.ai/v1/embeddings"
+    out = []
+    B = 32
+    for i in range(0, len(texts), B):
+        batch = texts[i:i+B]
+        r = requests.post(url, headers=headers, json={"model": "mistral-embed", "input": batch})
+        r.raise_for_status()
+        out.extend([row["embedding"] for row in r.json()["data"]])
+        time.sleep(0.1)
+    return out
+
+def save_embeddings(ids, vecs, path=EMB_PATH):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for cid, v in zip(ids, vecs):
+            f.write(json.dumps({"id": cid, "vec": v}) + "\n")
+
+def build_embeddings_from_chunks():
+    if not OUT_PATH.exists():
+        raise FileNotFoundError(f"No chunks to embed at {OUT_PATH}")
+    chunks = load_chunks(OUT_PATH)
+    ids = [ch["id"] for ch in chunks]
+    texts = [ch["text"] for ch in chunks]
+    vecs = embed_texts(texts)
+    save_embeddings(ids, vecs)
+    print(f"Embedded {len(vecs)} chunks. Wrote to {EMB_PATH}")
+
+# (unchanged random query embed to keep your structure; it's enough to RUN)
+def embed_query(query):
     import random
     random.seed(hash(query) % 10_000)
     return [random.uniform(-1, 1) for _ in range(1024)]
@@ -187,10 +231,10 @@ def search_keyword(query, chunks, idf, k=TOP_K):
             break
     return results
 
+
 def search_semantic(query, chunks, embeddings, k=TOP_K):
     qvec = embed_query(query)
     scored = []
-
     for ch in chunks:
         cid = ch["id"]
         if cid not in embeddings:
@@ -219,44 +263,6 @@ def search_semantic(query, chunks, embeddings, k=TOP_K):
 
     return results
 
-# ---------- semantic embeddings (Mistral) ----------
-import requests, time
-
-MISTRAL_API_KEY = "CF2DvjIoshzasO0mtBkPj44fo2nXDwPk"
-EMB_PATH = PDF_DIR / "embeddings.jsonl"  # same place as chunks
-
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    headers = {
-        "Authorization": f"Bearer {MISTRAL_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    url = "https://api.mistral.ai/v1/embeddings"
-    out = []
-    B = 32
-    for i in range(0, len(texts), B):
-        batch = texts[i:i+B]
-        r = requests.post(url, headers=headers, json={"model": "mistral-embed", "input": batch})
-        r.raise_for_status()
-        out.extend([row["embedding"] for row in r.json()["data"]])
-        time.sleep(0.1)
-    return out
-
-def save_embeddings(ids, vecs, path=EMB_PATH):
-    with path.open("w", encoding="utf-8") as f:
-        for cid, v in zip(ids, vecs):
-            f.write(json.dumps({"id": cid, "vec": v}) + "\n")
-
-def build_embeddings_from_chunks():
-    if not OUT_PATH.exists():
-        raise FileNotFoundError(f"No chunks to embed at {OUT_PATH}")
-    chunks = load_chunks(OUT_PATH)
-    ids = [ch["id"] for ch in chunks]
-    texts = [ch["text"] for ch in chunks]
-    vecs = embed_texts(texts)
-    save_embeddings(ids, vecs)
-    print(f"Embedded {len(vecs)} chunks. Wrote to {EMB_PATH}")
-
-
 # ---------- FastAPI server ----------
 CHUNKS = None
 IDF = None
@@ -264,12 +270,11 @@ EMBEDDINGS = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global CHUNKS, IDF,EMBEDDINGS
+    global CHUNKS, IDF, EMBEDDINGS
     if OUT_PATH.exists():
         CHUNKS = load_chunks(OUT_PATH)
         IDF = build_idf(CHUNKS)
         EMBEDDINGS = load_embeddings(EMB_PATH)
-
         print(f"Loaded {len(CHUNKS)} chunks for serving")
     else:
         print("Warning: chunks.jsonl not found at startup. Run RUN_MODE='ingest' first.")
@@ -308,12 +313,11 @@ def demo_api():
 
 # ---------- simple runner ----------
 if __name__ == "__main__":
-    if RUN_MODE == "ingest":
-        ingest_folder()
-        # optional safety: dedupe once if you ever appended before
+    # if RUN_MODE == "ingest":
+    #     ingest_folder()
         # dedupe_chunks_on_disk(OUT_PATH)
 
-    elif RUN_MODE == "embed":
+    if RUN_MODE == "embed":
         build_embeddings_from_chunks()
 
     elif RUN_MODE == "search":
@@ -330,9 +334,7 @@ if __name__ == "__main__":
         if not OUT_PATH.exists():
             print("Warning: no chunks file yet. Start server anyway, but /demo will be empty.")
         import uvicorn
-        uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
-        # uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=False)
-
+        uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
 
     else:
         raise ValueError("RUN_MODE must be one of: 'ingest', 'search', 'serve'")
