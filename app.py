@@ -17,11 +17,11 @@ import re, json, uuid, math
 from collections import Counter, defaultdict
 
 # ---------- paths and knobs ----------
-PDF_DIR = Path(r"C:\Users\WJawad\OneDrive - Element Fleet Management\Desktop\pdfs")
+PDF_DIR = Path(r"C:\Users\wissa\Desktop\app\realestaterag")  # put your PDFs here
 OUT_PATH = PDF_DIR / "chunks.jsonl"  # save next to your PDFs
 CHUNK_SIZE = 800
 OVERLAP = 150
-RUN_MODE = "serve"         # choose: "ingest" | "embed" | "search" | "serve"
+RUN_MODE = "ingest"         # choose: "ingest" | "embed" | "search" | "serve"
 DEFAULT_QUERY = "what is a process"
 TOP_K = 5
 
@@ -220,41 +220,41 @@ def search_semantic(query, chunks, embeddings, k=TOP_K):
     return results
 
 # ---------- semantic embeddings (Mistral) ----------
-# import requests, time
+import requests, time
 
-# MISTRAL_API_KEY = "CF2DvjIoshzasO0mtBkPj44fo2nXDwPk"
+MISTRAL_API_KEY = "CF2DvjIoshzasO0mtBkPj44fo2nXDwPk"
 EMB_PATH = PDF_DIR / "embeddings.jsonl"  # same place as chunks
 
-# def embed_texts(texts: list[str]) -> list[list[float]]:
-#     headers = {
-#         "Authorization": f"Bearer {MISTRAL_API_KEY}",
-#         "Content-Type": "application/json"
-#     }
-#     url = "https://api.mistral.ai/v1/embeddings"
-#     out = []
-#     B = 32
-#     for i in range(0, len(texts), B):
-#         batch = texts[i:i+B]
-#         r = requests.post(url, headers=headers, json={"model": "mistral-embed", "input": batch})
-#         r.raise_for_status()
-#         out.extend([row["embedding"] for row in r.json()["data"]])
-#         time.sleep(0.1)
-#     return out
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    headers = {
+        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    url = "https://api.mistral.ai/v1/embeddings"
+    out = []
+    B = 32
+    for i in range(0, len(texts), B):
+        batch = texts[i:i+B]
+        r = requests.post(url, headers=headers, json={"model": "mistral-embed", "input": batch})
+        r.raise_for_status()
+        out.extend([row["embedding"] for row in r.json()["data"]])
+        time.sleep(0.1)
+    return out
 
-# def save_embeddings(ids, vecs, path=EMB_PATH):
-#     with path.open("w", encoding="utf-8") as f:
-#         for cid, v in zip(ids, vecs):
-#             f.write(json.dumps({"id": cid, "vec": v}) + "\n")
+def save_embeddings(ids, vecs, path=EMB_PATH):
+    with path.open("w", encoding="utf-8") as f:
+        for cid, v in zip(ids, vecs):
+            f.write(json.dumps({"id": cid, "vec": v}) + "\n")
 
-# def build_embeddings_from_chunks():
-#     if not OUT_PATH.exists():
-#         raise FileNotFoundError(f"No chunks to embed at {OUT_PATH}")
-#     chunks = load_chunks(OUT_PATH)
-#     ids = [ch["id"] for ch in chunks]
-#     texts = [ch["text"] for ch in chunks]
-#     vecs = embed_texts(texts)
-#     save_embeddings(ids, vecs)
-#     print(f"Embedded {len(vecs)} chunks. Wrote to {EMB_PATH}")
+def build_embeddings_from_chunks():
+    if not OUT_PATH.exists():
+        raise FileNotFoundError(f"No chunks to embed at {OUT_PATH}")
+    chunks = load_chunks(OUT_PATH)
+    ids = [ch["id"] for ch in chunks]
+    texts = [ch["text"] for ch in chunks]
+    vecs = embed_texts(texts)
+    save_embeddings(ids, vecs)
+    print(f"Embedded {len(vecs)} chunks. Wrote to {EMB_PATH}")
 
 
 # ---------- FastAPI server ----------
@@ -300,11 +300,11 @@ def query_api(body: QueryIn):
         "semantic_results": sem_results
     }
 
-# @app.get("/demo")
-# def demo_api():
-#     if not CHUNKS or not IDF:
-#         return {"query": DEFAULT_QUERY, "results": [], "note": "No chunks loaded. Run ingestion first."}
-#     return {"query": DEFAULT_QUERY, "results": search_keyword(DEFAULT_QUERY, CHUNKS, IDF, TOP_K)}
+@app.get("/demo")
+def demo_api():
+    if not CHUNKS or not IDF:
+        return {"query": DEFAULT_QUERY, "results": [], "note": "No chunks loaded. Run ingestion first."}
+    return {"query": DEFAULT_QUERY, "results": search_keyword(DEFAULT_QUERY, CHUNKS, IDF, TOP_K)}
 
 # ---------- simple runner ----------
 if __name__ == "__main__":
@@ -313,8 +313,8 @@ if __name__ == "__main__":
         # optional safety: dedupe once if you ever appended before
         # dedupe_chunks_on_disk(OUT_PATH)
 
-    # elif RUN_MODE == "embed":
-    #     build_embeddings_from_chunks()
+    elif RUN_MODE == "embed":
+        build_embeddings_from_chunks()
 
     elif RUN_MODE == "search":
         if not OUT_PATH.exists():
