@@ -7,7 +7,7 @@
 import os
 from pathlib import Path
 from pypdf import PdfReader
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import re, json, uuid, math
@@ -233,6 +233,35 @@ def embed_query(query):
     return embed_texts([query])[0]
 
 
+def generate_response(query, context_chunks):
+    """Generate a response using Mistral chat API based on query and retrieved chunks."""
+    headers = {
+        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    url = "https://api.mistral.ai/v1/chat/completions"
+
+    # Prepare context from chunks
+    context = "\n".join([f"Chunk {i+1}: {chunk['text']}" for i, chunk in enumerate(context_chunks[:3])])  # Limit to top 3 for brevity
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant. Answer the question based on the provided context. If the context doesn't contain enough information, say so."},
+        {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"}
+    ]
+
+    data = {
+        "model": "mistral-medium",  # or another available model
+        "messages": messages,
+        "max_tokens": 500,
+        "temperature": 0.7
+    }
+
+    r = requests.post(url, headers=headers, json=data)
+    r.raise_for_status()
+    response = r.json()["choices"][0]["message"]["content"]
+    return response
+
+
 def search_keyword(query, chunks, idf, k=TOP_K):
     qv = tfidf(tokenize(query), idf)
     scored = []
@@ -353,6 +382,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="RAG demo", lifespan=lifespan)
 
+@app.get("/")
+def root():
+    return {"message": "RAG API is running. Visit /docs for API documentation, /demo for a demo query."}
+
 class QueryIn(BaseModel):
     query: str
     top_k: int = TOP_K
@@ -373,6 +406,48 @@ def query_api(body: QueryIn):
         "query": q,
         "hybrid_results": hybrid_results
     }
+
+@app.post("/upload")
+async def upload_pdfs(files: list[UploadFile] = File(...)):
+    """Upload one or more PDF files for ingestion."""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    all_chunks = []
+    for file in files:
+        if not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail=f"File {file.filename} is not a PDF")
+
+        # Save the uploaded file
+        temp_path = PDF_DIR / file.filename
+        with temp_path.open("wb") as f:
+            f.write(await file.read())
+
+        # Process the PDF
+        pages = extract_pages(temp_path)
+        chunks = chunk_pages(pages, file.filename)
+        all_chunks.extend(chunks)
+        print(f"{file.filename}: {len(chunks)} chunks")
+
+    # Save chunks
+    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with OUT_PATH.open("w", encoding="utf-8") as f:
+        for ch in all_chunks:
+            f.write(json.dumps(ch, ensure_ascii=False) + "\n")
+
+    # Embed chunks
+    ids = [ch["id"] for ch in all_chunks]
+    texts = [ch["text"] for ch in all_chunks]
+    vecs = embed_texts(texts)
+    save_embeddings(ids, vecs)
+
+    # Update global data
+    global CHUNKS, IDF, EMBEDDINGS
+    CHUNKS = all_chunks
+    IDF = build_idf(CHUNKS)
+    EMBEDDINGS = load_embeddings(EMB_PATH)
+
+    return {"message": f"Uploaded and processed {len(files)} PDF(s). Total chunks: {len(all_chunks)}"}
 
 @app.get("/demo")
 def demo_api():
@@ -403,7 +478,7 @@ if __name__ == "__main__":
         if not OUT_PATH.exists():
             print("Warning: no chunks file yet. Start server anyway, but /demo will be empty.")
         import uvicorn
-        uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+        uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
 
     else:
         raise ValueError("RUN_MODE must be one of: 'ingest', 'search', 'serve'")

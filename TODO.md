@@ -1,13 +1,29 @@
-# TODO List for RAG Pipeline Improvements
+# TODO List for Full RAG Pipeline Implementation
 
-- [x] Add import os at the top of app.py
-- [x] Update MISTRAL_API_KEY to use os.getenv("MISTRAL_API_KEY") (hardcoded for simplicity)
-- [x] Enhance normalize() function with regex cleaning for PDF artifacts (e.g., remove headers, footers, extra spaces)
-- [x] Modify chunk_pages() for sentence-based chunking using re.split(r'(?<=[.!?])\s+')
-- [x] Replace embed_query() to call embed_texts() for real embeddings
-- [x] Add hybrid search function combining keyword and semantic scores
-- [ ] Add generate_response() function using Mistral chat API for LLM generation
-- [x] Enrich chunk metadata (add word count, sentence count, etc.)
-- [x] Add timing in embed_texts() using time.time()
-- [x] Remove DEFAULT_QUERY and related code (no default query, user input later)
-- [x] Test the updated pipeline (run modes: ingest, embed, search, serve) - critical path tested
+## Core Requirements
+- [x] Data Ingestion: Implement text extraction and chunking from PDF files (sentence-based chunking done)
+- [ ] Data Ingestion: Develop API endpoint to upload PDF files (/upload endpoint)
+- [ ] Query Processing: Intent detection (basic check for greetings done, enhance)
+- [ ] Query Processing: Transform query to improve retrieval (e.g., expand abbreviations, remove stop words)
+- [ ] Semantic Search: Design search mechanism using processed query (hybrid search done)
+- [x] Semantic Search: Combine semantic and keyword results (hybrid search averages scores)
+- [ ] Post-processing: Merge and re-rank results (enhance hybrid search with better ranking)
+- [x] Generation: Call LLM with prompt template to generate answers (generate_response done)
+- [ ] UI: Implement a chat UI to interact with the system
+
+## FastAPI Endpoints
+- [x] Ingestion: POST /upload - Upload one or more PDF files
+- [x] Querying: POST /query - Query the system with user questions (hybrid search)
+- [ ] Querying: Enhance /query to include generation and citations
+
+## Bonus Features
+- [ ] Citations: Refuse to answer if top-k chunks don't meet similarity threshold
+- [ ] Answer shaping: Switch templates by intent; structured outputs
+- [ ] Hallucination filters: Post-hoc evidence check
+- [ ] Query refusal policies: PII, legal/medical disclaimers
+
+## Miscellaneous
+- [ ] Update MISTRAL_API_KEY to "CF2DvjIoshzasO0mtBkPj44fo2nXDwPk" (skipped as user said it doesn't work)
+- [ ] Add README.md with system design, diagrams, how to run
+- [ ] Implement UI (e.g., simple HTML/JS chat interface)
+- [ ] Test full pipeline: ingestion via API, querying, generation
