@@ -4,6 +4,7 @@
 # 1) Set RUN_MODE = "ingest" to build chunks.jsonl from your PDFs
 # 2) Set RUN_MODE = "search" to run a default search without typing input
 # 3) Set RUN_MODE = "serve" to start a FastAPI server and test /docs or /demo
+import os
 from pathlib import Path
 from pypdf import PdfReader
 from fastapi import FastAPI
@@ -19,12 +20,15 @@ OUT_PATH = PDF_DIR / "chunks.jsonl"  # save next to your PDFs
 EMB_PATH = PDF_DIR / "embeddings.jsonl"
 CHUNK_SIZE = 800
 OVERLAP = 150
-RUN_MODE = "embed"         # choose: "ingest" | "embed" | "search" | "serve"
-DEFAULT_QUERY = "what is a process"
+RUN_MODE = "serve"         # choose: "ingest" | "embed" | "search" | "serve"
 TOP_K = 5
 
 # ---------- ingestion ----------
 def normalize(text: str) -> str:
+    # Remove PDF artifacts like headers, footers, page numbers
+    t = re.sub(r'\n\d+\n', '\n', text)  # Remove page numbers
+    t = re.sub(r'^\s*Page \d+\s*$', '', t, flags=re.MULTILINE)  # Remove "Page X" lines
+    t = re.sub(r'^\s*Chapter \d+.*$', '', t, flags=re.MULTILINE)  # Remove chapter headers
     t = text.replace("\r", "\n")
     t = re.sub(r"[ \t]+", " ", t)
     t = re.sub(r"\n{2,}", "\n", t)
@@ -44,21 +48,48 @@ def chunk_pages(pages, file_name):
     chunks = []
     for p in pages:
         txt = p["text"]
-        start = 0
-        n = len(txt)
-        while start < n:
-            end = min(start + CHUNK_SIZE, n)
+        # Sentence-based chunking
+        sentences = re.split(r'(?<=[.!?])\s+', txt)
+        current_chunk = ""
+        for sentence in sentences:
+            if len(current_chunk) + len(sentence) > CHUNK_SIZE:
+                if current_chunk:
+                    chunks.append({
+                        "id": str(uuid.uuid4()),
+                        "file": file_name,
+                        "page": p["page"],
+                        "start": len(txt) - len(current_chunk) - len(sentence),  # approximate start
+                        "end": len(txt) - len(sentence),
+                        "text": current_chunk.strip(),
+                        "word_count": len(current_chunk.split()),
+                        "sentence_count": len(re.findall(r'[.!?]', current_chunk))
+                    })
+                    current_chunk = sentence
+                else:
+                    # If sentence is too long, split it
+                    chunks.append({
+                        "id": str(uuid.uuid4()),
+                        "file": file_name,
+                        "page": p["page"],
+                        "start": len(txt) - len(sentence),
+                        "end": len(txt),
+                        "text": sentence.strip(),
+                        "word_count": len(sentence.split()),
+                        "sentence_count": len(re.findall(r'[.!?]', sentence))
+                    })
+            else:
+                current_chunk += " " + sentence
+        if current_chunk:
             chunks.append({
                 "id": str(uuid.uuid4()),
                 "file": file_name,
                 "page": p["page"],
-                "start": start,
-                "end": end,
-                "text": txt[start:end]
+                "start": len(txt) - len(current_chunk),
+                "end": len(txt),
+                "text": current_chunk.strip(),
+                "word_count": len(current_chunk.split()),
+                "sentence_count": len(re.findall(r'[.!?]', current_chunk))
             })
-            if end == n:
-                break
-            start = end - OVERLAP
     return chunks
 
 def ingest_folder():
@@ -171,12 +202,15 @@ def embed_texts(texts):
     url = "https://api.mistral.ai/v1/embeddings"
     out = []
     B = 32
+    start_time = time.time()
     for i in range(0, len(texts), B):
         batch = texts[i:i+B]
         r = requests.post(url, headers=headers, json={"model": "mistral-embed", "input": batch})
         r.raise_for_status()
         out.extend([row["embedding"] for row in r.json()["data"]])
         time.sleep(0.1)
+    end_time = time.time()
+    print(f"Embedded {len(texts)} texts in {end_time - start_time:.2f} seconds")
     return out
 
 def save_embeddings(ids, vecs, path=EMB_PATH):
@@ -195,11 +229,8 @@ def build_embeddings_from_chunks():
     save_embeddings(ids, vecs)
     print(f"Embedded {len(vecs)} chunks. Wrote to {EMB_PATH}")
 
-# (unchanged random query embed to keep your structure; it's enough to RUN)
 def embed_query(query):
-    import random
-    random.seed(hash(query) % 10_000)
-    return [random.uniform(-1, 1) for _ in range(1024)]
+    return embed_texts([query])[0]
 
 
 def search_keyword(query, chunks, idf, k=TOP_K):
@@ -263,6 +294,46 @@ def search_semantic(query, chunks, embeddings, k=TOP_K):
 
     return results
 
+
+def search_hybrid(query, chunks, idf, embeddings, k=TOP_K):
+    kw_results = search_keyword(query, chunks, idf, k * 2)  # Get more for hybrid
+    sem_results = search_semantic(query, chunks, embeddings, k * 2)
+
+    # Combine scores: average of keyword and semantic
+    combined = {}
+    for res in kw_results + sem_results:
+        cid = res["id"]
+        if cid not in combined:
+            combined[cid] = {"score": 0, "count": 0, "data": res}
+        combined[cid]["score"] += res["score"]
+        combined[cid]["count"] += 1
+
+    # Average the scores
+    for cid in combined:
+        combined[cid]["score"] /= combined[cid]["count"]
+
+    # Sort by combined score
+    sorted_combined = sorted(combined.values(), key=lambda x: x["score"], reverse=True)
+
+    results = []
+    seen = set()
+    for item in sorted_combined:
+        res = item["data"]
+        key = (res["file"], res["page"], res["text"][:160])
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append({
+            "score": round(item["score"], 4),
+            "file": res["file"],
+            "page": res["page"],
+            "id": res["id"],
+            "snippet": res["snippet"]
+        })
+        if len(results) == k:
+            break
+    return results
+
 # ---------- FastAPI server ----------
 CHUNKS = None
 IDF = None
@@ -290,26 +361,24 @@ class QueryIn(BaseModel):
 def query_api(body: QueryIn):
     if not CHUNKS or not IDF or not EMBEDDINGS:
         return {"results": [], "note": "Missing data. Run ingestion and ensure embeddings are loaded."}
-    
+
     q = body.query.strip()
 
     if q.lower() in {"hi", "hello", "thanks", "thank you"} or len(q.split()) < 2:
         return {"results": [], "note": "Ask a question about your PDFs."}
 
-    kw_results = search_keyword(q, CHUNKS, IDF, body.top_k)
-    sem_results = search_semantic(q, CHUNKS, EMBEDDINGS, body.top_k)
+    hybrid_results = search_hybrid(q, CHUNKS, IDF, EMBEDDINGS, body.top_k)
 
     return {
         "query": q,
-        "keyword_results": kw_results,
-        "semantic_results": sem_results
+        "hybrid_results": hybrid_results
     }
 
 @app.get("/demo")
 def demo_api():
     if not CHUNKS or not IDF:
-        return {"query": DEFAULT_QUERY, "results": [], "note": "No chunks loaded. Run ingestion first."}
-    return {"query": DEFAULT_QUERY, "results": search_keyword(DEFAULT_QUERY, CHUNKS, IDF, TOP_K)}
+        return {"query": "What items are included in the property sale by default?", "results": [], "note": "No chunks loaded. Run ingestion first."}
+    return {"query": "What items are included in the property sale by default?", "results": search_keyword("What items are included in the property sale by default?", CHUNKS, IDF, TOP_K)}
 
 # ---------- simple runner ----------
 if __name__ == "__main__":
