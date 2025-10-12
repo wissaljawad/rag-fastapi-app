@@ -14,7 +14,7 @@
 ## FastAPI Endpoints
 - [x] Ingestion: POST /upload - Upload one or more PDF files
 - [x] Querying: POST /query - Query the system with user questions (hybrid search)
-- [ ] Querying: Enhance /query to include generation and citations
+- [x] Querying: Enhance /query to include generation and citations
 
 ## Bonus Features
 - [ ] Citations: Refuse to answer if top-k chunks don't meet similarity threshold

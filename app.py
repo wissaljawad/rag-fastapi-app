@@ -448,9 +448,18 @@ def query_api(body: QueryIn):
 
     hybrid_results = search_hybrid(processed_query, CHUNKS, IDF, EMBEDDINGS, body.top_k)
 
+    # Generate response using top chunks
+    top_chunks = [ch for ch in CHUNKS if ch["id"] in [r["id"] for r in hybrid_results[:3]]]
+    generated_answer = generate_response(processed_query, top_chunks)
+
+    # Add citations
+    citations = [{"file": ch["file"], "page": ch["page"], "snippet": ch["text"][:100]} for ch in top_chunks]
+
     return {
         "query": processed_query,
-        "hybrid_results": hybrid_results
+        "answer": generated_answer,
+        "hybrid_results": hybrid_results,
+        "citations": citations
     }
 
 @app.post("/upload")
