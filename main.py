@@ -1,4 +1,4 @@
-# app.py
+# main.py
 # Minimal one file RAG scaffold, ingest + keyword search + optional API
 # How to use:
 # 1) Set RUN_MODE = "ingest" to build chunks.jsonl from your PDFs
@@ -669,7 +669,7 @@ if __name__ == "__main__":
         if not OUT_PATH.exists():
             print("Warning: no chunks file yet. Start server anyway, but /demo will be empty.")
         import uvicorn
-        uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+        uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
 
     else:
         raise ValueError("RUN_MODE must be one of: 'ingest', 'search', 'serve'")

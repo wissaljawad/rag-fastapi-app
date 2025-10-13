@@ -8,31 +8,9 @@ This system enables users to upload PDF documents and ask questions about their 
 
 ## 💡 Example Questions to Try
 
-Once you've uploaded your PDF documents, try asking questions like:
-
-**Property/Real Estate Documents:**
+Questions to ask:
 - "What items are included in the property sale by default?"
 - "What are the seller's obligations under this agreement?"
-- "What is the closing date for this transaction?"
-- "Are there any contingencies in this contract?"
-
-**Legal/Contract Documents:**
-- "What are the payment terms outlined in this agreement?"
-- "What happens if either party breaches the contract?"
-- "What is the termination clause?"
-- "Are there any warranties or guarantees mentioned?"
-
-**Technical Documentation:**
-- "How do I install this software?"
-- "What are the system requirements?"
-- "What troubleshooting steps are recommended?"
-- "What are the main features of this product?"
-
-**General Questions:**
-- "Summarize the key points of this document"
-- "What dates are mentioned in this document?"
-- "Who are the parties involved in this agreement?"
-- "What are the main responsibilities outlined?"
 
 **Note**: The system will refuse to answer if:
 - The question is too vague or conversational (e.g., "hello", "thanks")
@@ -144,7 +122,7 @@ pip install fastapi uvicorn pypdf pydantic requests
 ```
 
 4. **Set up Mistral API Key** (if using your own)
-Edit `app.py` and update the `MISTRAL_API_KEY` variable:
+Edit `main.py` and update the `MISTRAL_API_KEY` variable:
 ```python
 MISTRAL_API_KEY = "your-api-key-here"
 ```
@@ -154,7 +132,7 @@ MISTRAL_API_KEY = "your-api-key-here"
 ### Starting the Server
 
 ```bash
-python app.py
+python main.py
 ```
 
 The server will start at `http://127.0.0.1:8000`
@@ -374,7 +352,7 @@ Response: `"I don't have enough information in the knowledge base to answer this
 
 ## 🔧 Configuration
 
-Key parameters in `app.py`:
+Key parameters in `main.py`:
 
 ```python
 CHUNK_SIZE = 800        # Characters per chunk
@@ -419,7 +397,7 @@ EMBED_MODEL = "mistral-embed"           # Embedding model
 ## 🧪 Testing
 
 ### Manual Testing
-1. Start the server: `python app.py`
+1. Start the server: `python main.py`
 2. Upload test PDFs via `/upload` endpoint
 3. Query via web UI or `/query` endpoint
 4. Verify citations and answer quality
@@ -445,7 +423,7 @@ lsof -ti:8000 | xargs kill -9
 ```
 
 ### Issue: CORS errors in browser
-**Solution**: Ensure CORS middleware is enabled in `app.py`
+**Solution**: Ensure CORS middleware is enabled in `main.py`
 ```python
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(CORSMiddleware, allow_origins=["*"], ...)
