@@ -398,7 +398,7 @@ def search_hybrid(query, chunks, idf, embeddings, k=TOP_K):
     seen = set()
     for item in sorted_combined:
         res = item["data"]
-        key = (res["file"], res["page"], res["text"][:160])
+        key = (res["file"], res["page"], res["snippet"][:160])  # Use snippet instead of text
         if key in seen:
             continue
         seen.add(key)
@@ -458,19 +458,30 @@ class QueryIn(BaseModel):
 
 @app.post("/query")
 def query_api(body: QueryIn):
+    import traceback
+    
     if not CHUNKS or not IDF or not EMBEDDINGS:
-        return {"results": [], "note": "Missing data. Run ingestion and ensure embeddings are loaded."}
+        return {"answer": None, "citations": [], "note": "Missing data. Run ingestion and ensure embeddings are loaded."}
 
     try:
         # Process query for intent and transformation
         processed_query, error_msg = process_query(body.query)
         if processed_query is None:
-            return {"results": [], "note": error_msg}
+            return {"answer": None, "citations": [], "note": error_msg}
 
         hybrid_results = search_hybrid(processed_query, CHUNKS, IDF, EMBEDDINGS, body.top_k)
 
         # Generate response using top chunks
-        top_chunks = [ch for ch in CHUNKS if ch["id"] in [r["id"] for r in hybrid_results[:3]]]
+        result_ids = [r["id"] for r in hybrid_results[:3]]
+        top_chunks = [ch for ch in CHUNKS if ch["id"] in result_ids]
+        
+        print(f"Generating response for query: {processed_query}")
+        print(f"Hybrid results: {len(hybrid_results)}")
+        print(f"Result IDs: {result_ids}")
+        print(f"Top chunks found: {len(top_chunks)}")
+        if top_chunks:
+            print(f"First chunk keys: {top_chunks[0].keys()}")
+        
         generated_answer = generate_response(processed_query, top_chunks)
 
         # Add citations
@@ -483,10 +494,9 @@ def query_api(body: QueryIn):
             "citations": citations
         }
     except Exception as e:
-        import traceback
         error_details = traceback.format_exc()
         print(f"Error in query_api: {error_details}")
-        return {"results": [], "note": f"Error processing query: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
 
 @app.post("/upload")
 async def upload_pdfs(files: List[UploadFile] = File(...)):
