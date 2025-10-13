@@ -26,6 +26,9 @@ CHUNK_SIZE = 800
 OVERLAP = 150
 RUN_MODE = "serve"         # choose: "ingest" | "embed" | "search" | "serve"
 TOP_K = 5
+SIMILARITY_THRESHOLD = 0.3  # Minimum score to answer confidently
+RERANK_BOOST_RECENT = 0.1   # Boost for more recent pages
+RERANK_BOOST_LENGTH = 0.05  # Boost for longer, more detailed chunks
 
 # ---------- ingestion ----------
 def normalize(text: str) -> str:
@@ -374,7 +377,53 @@ def search_semantic(query, chunks, embeddings, k=TOP_K):
     return results
 
 
-def search_hybrid(query, chunks, idf, embeddings, k=TOP_K):
+def rerank_results(results, chunks_dict, query):
+    """
+    Advanced re-ranking with multiple signals:
+    - Original hybrid score
+    - Chunk length (longer chunks may be more informative)
+    - Page recency (earlier pages might be more important)
+    - Query term density
+    """
+    reranked = []
+    query_tokens = set(tokenize(query))
+    
+    for res in results:
+        chunk = chunks_dict.get(res["id"])
+        if not chunk:
+            continue
+            
+        score = res["score"]
+        
+        # Boost for longer, more detailed chunks
+        length_boost = min(chunk.get("word_count", 0) / 200.0, 1.0) * RERANK_BOOST_LENGTH
+        
+        # Boost for earlier pages (often contain key information)
+        page_boost = (1.0 / (chunk["page"] + 1)) * RERANK_BOOST_RECENT
+        
+        # Boost for query term density
+        chunk_tokens = set(tokenize(chunk["text"]))
+        term_overlap = len(query_tokens & chunk_tokens) / max(len(query_tokens), 1)
+        density_boost = term_overlap * 0.1
+        
+        # Combined score
+        final_score = score + length_boost + page_boost + density_boost
+        
+        reranked.append({
+            "score": round(final_score, 4),
+            "file": res["file"],
+            "page": res["page"],
+            "id": res["id"],
+            "snippet": res["snippet"],
+            "original_score": round(score, 4)
+        })
+    
+    # Sort by final score
+    reranked.sort(key=lambda x: x["score"], reverse=True)
+    return reranked
+
+
+def search_hybrid(query, chunks, idf, embeddings, k=TOP_K, rerank=True):
     kw_results = search_keyword(query, chunks, idf, k * 2)  # Get more for hybrid
     sem_results = search_semantic(query, chunks, embeddings, k * 2)
 
@@ -409,9 +458,15 @@ def search_hybrid(query, chunks, idf, embeddings, k=TOP_K):
             "id": res["id"],
             "snippet": res["snippet"]
         })
-        if len(results) == k:
+        if len(results) >= k * 2:  # Get more for re-ranking
             break
-    return results
+    
+    # Apply advanced re-ranking
+    if rerank and results:
+        chunks_dict = {ch["id"]: ch for ch in chunks}
+        results = rerank_results(results, chunks_dict, query)
+    
+    return results[:k]
 
 # ---------- FastAPI server ----------
 CHUNKS = None
@@ -456,6 +511,38 @@ class QueryIn(BaseModel):
     query: str
     top_k: int = TOP_K
 
+def check_query_refusal(query):
+    """
+    BONUS: Query refusal policies for sensitive content.
+    Returns (should_refuse, reason) tuple.
+    """
+    q_lower = query.lower()
+    
+    # PII detection patterns
+    pii_patterns = [
+        r'\b\d{3}-\d{2}-\d{4}\b',  # SSN
+        r'\b\d{16}\b',  # Credit card
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',  # Email
+        r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',  # Phone number
+    ]
+    
+    for pattern in pii_patterns:
+        if re.search(pattern, query):
+            return True, "I cannot process queries containing personal identifiable information (PII) for privacy reasons."
+    
+    # Legal/medical disclaimers
+    legal_keywords = ['legal advice', 'lawsuit', 'sue', 'attorney', 'lawyer', 'court case']
+    medical_keywords = ['medical advice', 'diagnosis', 'treatment', 'medication', 'prescription', 'doctor']
+    
+    if any(kw in q_lower for kw in legal_keywords):
+        return True, "I cannot provide legal advice. Please consult with a qualified attorney for legal matters."
+    
+    if any(kw in q_lower for kw in medical_keywords):
+        return True, "I cannot provide medical advice. Please consult with a qualified healthcare professional for medical matters."
+    
+    return False, None
+
+
 @app.post("/query")
 def query_api(body: QueryIn):
     import traceback
@@ -464,12 +551,25 @@ def query_api(body: QueryIn):
         return {"answer": None, "citations": [], "note": "Missing data. Run ingestion and ensure embeddings are loaded."}
 
     try:
+        # BONUS: Check for query refusal policies (PII, legal, medical)
+        should_refuse, refusal_reason = check_query_refusal(body.query)
+        if should_refuse:
+            return {"answer": None, "citations": [], "note": refusal_reason}
+        
         # Process query for intent and transformation
         processed_query, error_msg = process_query(body.query)
         if processed_query is None:
             return {"answer": None, "citations": [], "note": error_msg}
 
         hybrid_results = search_hybrid(processed_query, CHUNKS, IDF, EMBEDDINGS, body.top_k)
+        
+        # BONUS: Similarity threshold - refuse to answer if confidence is too low
+        if not hybrid_results or hybrid_results[0]["score"] < SIMILARITY_THRESHOLD:
+            return {
+                "answer": None,
+                "citations": [],
+                "note": "I don't have enough information in the knowledge base to answer this question confidently. The retrieved information doesn't meet the similarity threshold."
+            }
 
         # Generate response using top chunks
         result_ids = [r["id"] for r in hybrid_results[:3]]
@@ -477,10 +577,9 @@ def query_api(body: QueryIn):
         
         print(f"Generating response for query: {processed_query}")
         print(f"Hybrid results: {len(hybrid_results)}")
+        print(f"Top result score: {hybrid_results[0]['score'] if hybrid_results else 'N/A'}")
         print(f"Result IDs: {result_ids}")
         print(f"Top chunks found: {len(top_chunks)}")
-        if top_chunks:
-            print(f"First chunk keys: {top_chunks[0].keys()}")
         
         generated_answer = generate_response(processed_query, top_chunks)
 
@@ -491,7 +590,8 @@ def query_api(body: QueryIn):
             "query": processed_query,
             "answer": generated_answer,
             "hybrid_results": hybrid_results,
-            "citations": citations
+            "citations": citations,
+            "confidence_score": hybrid_results[0]["score"] if hybrid_results else 0.0
         }
     except Exception as e:
         error_details = traceback.format_exc()
