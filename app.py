@@ -8,8 +8,12 @@ import os
 from pathlib import Path
 from pypdf import PdfReader
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
+from typing import List
 import re, json, uuid, math
 from collections import Counter, defaultdict
 import requests, time
@@ -428,9 +432,25 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="RAG demo", lifespan=lifespan)
 
+# Add CORS middleware to allow frontend to communicate with backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory=".", html=True), name="static")
+
 @app.get("/")
 def root():
-    return {"message": "RAG API is running. Visit /docs for API documentation, /demo for a demo query."}
+    return FileResponse("index.html")
+
+@app.get("/chat")
+def chat_ui():
+    return FileResponse("index.html")
 
 class QueryIn(BaseModel):
     query: str
@@ -463,7 +483,7 @@ def query_api(body: QueryIn):
     }
 
 @app.post("/upload")
-async def upload_pdfs(files: list[UploadFile] = File(...)):
+async def upload_pdfs(files: List[UploadFile] = File(...)):
     """Upload one or more PDF files for ingestion."""
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
