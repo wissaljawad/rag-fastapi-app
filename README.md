@@ -6,6 +6,40 @@ A production-ready Retrieval-Augmented Generation (RAG) system built with FastAP
 
 This system enables users to upload PDF documents and ask questions about their content using natural language. It combines traditional keyword search with modern semantic search to retrieve relevant information, then uses Mistral AI to generate accurate, contextual answers with citations.
 
+## 💡 Example Questions to Try
+
+Once you've uploaded your PDF documents, try asking questions like:
+
+**Property/Real Estate Documents:**
+- "What items are included in the property sale by default?"
+- "What are the seller's obligations under this agreement?"
+- "What is the closing date for this transaction?"
+- "Are there any contingencies in this contract?"
+
+**Legal/Contract Documents:**
+- "What are the payment terms outlined in this agreement?"
+- "What happens if either party breaches the contract?"
+- "What is the termination clause?"
+- "Are there any warranties or guarantees mentioned?"
+
+**Technical Documentation:**
+- "How do I install this software?"
+- "What are the system requirements?"
+- "What troubleshooting steps are recommended?"
+- "What are the main features of this product?"
+
+**General Questions:**
+- "Summarize the key points of this document"
+- "What dates are mentioned in this document?"
+- "Who are the parties involved in this agreement?"
+- "What are the main responsibilities outlined?"
+
+**Note**: The system will refuse to answer if:
+- The question is too vague or conversational (e.g., "hello", "thanks")
+- The retrieved information doesn't meet the confidence threshold
+- The query contains personal identifiable information (PII)
+- The question asks for legal or medical advice
+
 ## 🏗️ System Architecture
 
 ```
