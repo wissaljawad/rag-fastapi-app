@@ -300,7 +300,7 @@ def generate_response(query, context_chunks):
     ]
 
     data = {
-        "model": "mistral-medium",  # or another available model
+        "model": "mistral-small-latest",  # Updated to use available model
         "messages": messages,
         "max_tokens": 500,
         "temperature": 0.7
@@ -461,26 +461,32 @@ def query_api(body: QueryIn):
     if not CHUNKS or not IDF or not EMBEDDINGS:
         return {"results": [], "note": "Missing data. Run ingestion and ensure embeddings are loaded."}
 
-    # Process query for intent and transformation
-    processed_query, error_msg = process_query(body.query)
-    if processed_query is None:
-        return {"results": [], "note": error_msg}
+    try:
+        # Process query for intent and transformation
+        processed_query, error_msg = process_query(body.query)
+        if processed_query is None:
+            return {"results": [], "note": error_msg}
 
-    hybrid_results = search_hybrid(processed_query, CHUNKS, IDF, EMBEDDINGS, body.top_k)
+        hybrid_results = search_hybrid(processed_query, CHUNKS, IDF, EMBEDDINGS, body.top_k)
 
-    # Generate response using top chunks
-    top_chunks = [ch for ch in CHUNKS if ch["id"] in [r["id"] for r in hybrid_results[:3]]]
-    generated_answer = generate_response(processed_query, top_chunks)
+        # Generate response using top chunks
+        top_chunks = [ch for ch in CHUNKS if ch["id"] in [r["id"] for r in hybrid_results[:3]]]
+        generated_answer = generate_response(processed_query, top_chunks)
 
-    # Add citations
-    citations = [{"file": ch["file"], "page": ch["page"], "snippet": ch["text"][:100]} for ch in top_chunks]
+        # Add citations
+        citations = [{"file": ch["file"], "page": ch["page"], "snippet": ch["text"][:100]} for ch in top_chunks]
 
-    return {
-        "query": processed_query,
-        "answer": generated_answer,
-        "hybrid_results": hybrid_results,
-        "citations": citations
-    }
+        return {
+            "query": processed_query,
+            "answer": generated_answer,
+            "hybrid_results": hybrid_results,
+            "citations": citations
+        }
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error in query_api: {error_details}")
+        return {"results": [], "note": f"Error processing query: {str(e)}"}
 
 @app.post("/upload")
 async def upload_pdfs(files: List[UploadFile] = File(...)):
