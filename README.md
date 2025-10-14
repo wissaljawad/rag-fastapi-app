@@ -493,16 +493,4 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], ...)
   - Approximate nearest neighbor search (FAISS, Annoy)
   - Distributed processing
 
-## 📝 License
 
-This project is provided as-is for educational and evaluation purposes.
-
-## 👥 Contributing
-
-This is a demonstration project. For questions or suggestions, please open an issue.
-
-## 🙏 Acknowledgments
-
-- Mistral AI for providing the LLM and embedding APIs
-- FastAPI team for the excellent web framework
-- pypdf maintainers for PDF processing capabilities
