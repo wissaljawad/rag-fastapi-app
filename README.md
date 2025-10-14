@@ -87,6 +87,48 @@ Questions to ask:
 - ✅ **Similarity Threshold**: Refuses to answer when confidence is too low
 - ✅ **Re-ranking**: Advanced result scoring and deduplication
 
+## 📁 Project Structure
+
+```
+rag-fastapi-app/
+├── main.py              # FastAPI application and API endpoints
+├── config.py            # Configuration constants and parameters
+├── ingestion.py         # PDF processing, chunking, and embeddings
+├── search.py            # Search algorithms and query processing
+├── index.html           # Web UI chat interface
+├── chunks.jsonl         # Stored document chunks (generated)
+├── embeddings.jsonl     # Stored embeddings (generated)
+├── test_query.py        # API testing script
+└── README.md            # This file
+```
+
+### Module Descriptions
+
+**main.py** - FastAPI Application
+- API endpoint definitions (`/upload`, `/query`, `/demo`)
+- CORS middleware configuration
+- Server startup and lifespan management
+- Request/response models (Pydantic)
+
+**config.py** - Configuration
+- All constants and parameters (paths, API keys, thresholds)
+- Stopwords and query transformations
+- Refusal policies (PII, legal, medical keywords)
+
+**ingestion.py** - Document Processing
+- PDF text extraction and normalization
+- Sentence-based chunking with overlap
+- Embedding generation via Mistral API
+- Storage utilities (load/save chunks and embeddings)
+
+**search.py** - Search & Query Processing
+- Tokenization and TF-IDF keyword search
+- Semantic search with cosine similarity
+- Hybrid search combining both methods
+- Query intent detection and transformation
+- LLM response generation with Mistral AI
+- Result re-ranking and deduplication
+
 ## 📋 Requirements
 
 ### Python Dependencies
@@ -100,9 +142,9 @@ requests>=2.31.0
 
 ### External Services
 - **Mistral AI API**: For embeddings and text generation
-  - API Key: `CF2DvjIoshzasO0mtBkPj44fo2nXDwPk` (or use your own)
+  - Requires API key (configure in `config.py`)
 
-## 🛠️ Installation
+## ️ Installation
 
 1. **Clone the repository**
 ```bash
@@ -121,8 +163,8 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install fastapi uvicorn pypdf pydantic requests
 ```
 
-4. **Set up Mistral API Key** (if using your own)
-Edit `main.py` and update the `MISTRAL_API_KEY` variable:
+4. **Set up Mistral API Key**
+Edit `config.py` and update the `MISTRAL_API_KEY` variable:
 ```python
 MISTRAL_API_KEY = "your-api-key-here"
 ```
@@ -450,23 +492,6 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], ...)
   - Vector database (Pinecone, Weaviate, Qdrant)
   - Approximate nearest neighbor search (FAISS, Annoy)
   - Distributed processing
-
-## 🔐 Security Notes
-
-- API key should be stored in environment variables (not hardcoded)
-- Add authentication for production deployments
-- Validate and sanitize file uploads
-- Rate limiting recommended for public APIs
-
-## 🚧 Future Enhancements
-
-- [ ] Batch upload UI in web interface
-- [ ] Support for more file formats (DOCX, TXT, HTML)
-- [ ] Advanced re-ranking algorithms (cross-encoder)
-- [ ] Query history and conversation memory
-- [ ] Multi-language support
-- [ ] Streaming responses for real-time feedback
-- [ ] Admin dashboard for monitoring
 
 ## 📝 License
 

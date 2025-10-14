@@ -20,7 +20,7 @@ RERANK_BOOST_RECENT = 0.1  # Boost for more recent pages
 RERANK_BOOST_LENGTH = 0.05  # Boost for longer, more detailed chunks
 
 # ---------- API Configuration ----------
-MISTRAL_API_KEY = "OvaGGKbmryAJjIo3rg3vRumbJelS6nsk"
+MISTRAL_API_KEY = "YOUR_API_KEY_HERE"  # Replace with your Mistral API key
 MISTRAL_MODEL = "mistral-small-latest"  # LLM model for generation
 EMBED_MODEL = "mistral-embed"  # Model for embeddings
 EMBED_BATCH_SIZE = 32  # Batch size for embedding generation
